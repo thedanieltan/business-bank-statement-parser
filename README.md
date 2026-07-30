@@ -15,6 +15,79 @@ Script, files in the same project already share one global scope, so this
 is automatic there — for Node/browser, concatenate or `require()` it
 together with whichever parser you use).
 
+## Getting Started
+
+### Option A: Google Apps Script (recommended if your PDFs live in Google Drive)
+
+1. Go to [script.google.com](https://script.google.com) and create a new
+   project (or **Extensions → Apps Script** from a Google Sheet, if you
+   eventually want to write output somewhere).
+2. Add each file in `src/` as its own script file: **File → New → Script
+   file**, name it exactly as shown (e.g. `ParserAnext` — Apps Script
+   appends `.gs` automatically), then paste in that file's content.
+   Required: `ParserAnext.gs`, `ParserDbs.gs`, `ParserGeneric.gs`,
+   `BalanceCheck.gs`. Optional: `Extract.gs` (only if you want the Drive
+   OCR helper below).
+3. If you're using `extractPdfText()` from `Extract.gs`, enable the Drive
+   API advanced service: in the Apps Script editor, click **Services**
+   (+ icon) in the left sidebar, add **Drive API**, and save.
+4. Write a small driver function to try it end-to-end:
+   ```javascript
+   function testParseOneStatement() {
+     const file = DriveApp.getFilesByName('your-statement.pdf').next();
+     const text = extractPdfText(file);   // from Extract.gs
+     const parser = pickParser(text);      // from Extract.gs
+     const statement = parser.parse(text);
+     Logger.log(JSON.stringify(statement, null, 2));
+     Logger.log('Balance check passed: ' + statement.balanceCheck.passed);
+   }
+   ```
+5. Run it once from the editor (▶ **Run**) — the first run prompts you to
+   authorize Drive/Document access.
+6. Check the execution log (**View → Logs**, or Ctrl+Enter) for the parsed
+   output.
+
+### Option B: Node.js / plain JS (if you already extract PDF text yourself)
+
+`Extract.gs`'s OCR helpers call Apps-Script-only globals (`DriveApp`,
+`Drive`, `DocumentApp`, `Utilities`) and won't run outside Apps Script —
+skip that file. Everything else (`ParserAnext.gs`, `ParserDbs.gs`,
+`ParserGeneric.gs`, `BalanceCheck.gs`) is plain JS wrapped in a `const X
+= { ... }` object literal, so it takes one small step to make it
+`require()`-able:
+
+1. Clone the repo:
+   ```bash
+   git clone https://github.com/thedanieltan/business-bank-statement-parser.git
+   ```
+2. For each of the 4 required files, rename `.gs` → `.js` and add a single
+   line at the end: `module.exports = ParserAnext;` (swap in the matching
+   name for each file — `ParserDbs`, `ParserGeneric`, or, for
+   `BalanceCheck.gs`, `module.exports = { validateStatementBalance };`).
+   `ParserAnext.gs`/`ParserDbs.gs`/`ParserGeneric.gs` each call
+   `validateStatementBalance()` internally, so also add
+   `const { validateStatementBalance } = require('./BalanceCheck');` near
+   the top of those three files.
+3. Get your statement's text however you already do (e.g. `pdf-parse`,
+   `pdfjs-dist`, or your own OCR pipeline) — these parsers only need a
+   plain string, however you got it.
+4. Use it:
+   ```javascript
+   const ParserAnext = require('./src/ParserAnext');
+   const ParserDbs = require('./src/ParserDbs');
+   const ParserGeneric = require('./src/ParserGeneric');
+   const fs = require('fs');
+
+   const statementText = fs.readFileSync('my-statement.txt', 'utf8'); // your extracted text
+   const parser = ParserAnext.detect(statementText) ? ParserAnext
+                : ParserDbs.detect(statementText)   ? ParserDbs
+                : ParserGeneric;
+   const statement = parser.parse(statementText);
+   console.log(statement.balanceCheck);
+   ```
+
+Then see **Usage** below for what the returned `statement` object contains.
+
 ## Why deterministic parsing instead of an LLM
 
 Every rule here is regex/logic written directly against the real column
