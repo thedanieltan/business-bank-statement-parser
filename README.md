@@ -1,10 +1,14 @@
-# Bank Statement Parser (ANEXT / DBS)
+# Business Bank Statement Parser (ANEXT / DBS)
 
 Deterministic, LLM-free parsers that turn ANEXT Bank and DBS Bank
-(Singapore) "Account Statement" PDF text into structured transactions.
-Written in Google Apps Script (plain ES5-ish JS, no external
-dependencies), so it drops straight into any Apps Script project, or
-adapts easily to Node/browser JS.
+(Singapore) **business/corporate account** "Account Statement" PDF text
+into structured transactions. These are written against business account
+statement layouts specifically (e.g. DBS's business statement columns,
+ANEXT's business account summary format) — not personal account
+statements, which may have a different layout these parsers won't
+recognize correctly. Written in Google Apps Script (plain ES5-ish JS, no
+external dependencies), so it drops straight into any Apps Script
+project, or adapts easily to Node/browser JS.
 
 **Every parser file needs `BalanceCheck.gs` alongside it** (in Apps
 Script, files in the same project already share one global scope, so this

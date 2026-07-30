@@ -1,8 +1,9 @@
 /**
  * ParserAnext.gs
  * -----------------------------------------------------------------------
- * Deterministic parser for ANEXT Bank "Account Statement" PDFs, written
- * against how GOOGLE DRIVE OCR actually renders the current (2026) layout
+ * Deterministic parser for ANEXT Bank Business "Account Statement" PDFs,
+ * written against how GOOGLE DRIVE OCR actually renders the current (2026)
+ * layout
  * -- which differs from the visual PDF:
  *
  *   - Short rows are inline and several may share one OCR line:
