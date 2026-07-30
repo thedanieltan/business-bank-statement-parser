@@ -1,17 +1,29 @@
 /**
  * BalanceCheck.gs
  * -----------------------------------------------------------------------
- * Pure-arithmetic tally check shared by every parser. Required (not
+ * Pure-arithmetic tally checks shared by every parser. Required (not
  * optional, unlike Extract.gs) -- ParserAnext.gs, ParserDbs.gs, and
  * ParserGeneric.gs all call validateStatementBalance() at the end of
  * parse() and attach the result as statement.balanceCheck.
  *
- * This checks the statement's OWN reported numbers add up -- nothing about
- * ledgers, categorization, or any downstream system. It answers exactly one
- * question: "does opening + sum(transactions) equal closing, and does each
- * row's own printed running balance (where the bank prints one) agree with
- * the running total?" A `false` result almost always means a row was
- * mis-parsed or dropped, not that the bank's own statement is wrong.
+ * validateStatementBalance() checks the statement's OWN reported numbers
+ * add up -- nothing about ledgers, categorization, or any downstream
+ * system. It answers exactly one question: "does opening + sum(
+ * transactions) equal closing, and does each row's own printed running
+ * balance (where the bank prints one) agree with the running total?" A
+ * `false` result almost always means a row was mis-parsed or dropped, not
+ * that the bank's own statement is wrong.
+ *
+ * checkStatementContinuity() answers a DIFFERENT question -- one this
+ * parser has no way to check on its own, because it only ever sees one
+ * statement at a time: "does THIS statement pick up where the LAST one
+ * left off?" That requires remembering last month's closing balance
+ * somewhere between runs, which is inherently your call (a spreadsheet
+ * cell, a database row, Script Properties, a JSON file -- whatever you're
+ * already using to persist state), so this function takes that
+ * previously-known balance as a plain argument rather than assuming any
+ * particular storage. Not called automatically by parse() -- you call it
+ * yourself once you've fetched (or don't have) a previous balance.
  * -----------------------------------------------------------------------
  */
 
@@ -57,5 +69,59 @@ function validateStatementBalance(statement, tolerance) {
     expectedClosing: statement.closingBalance,
     calculatedClosing: calculatedClosing,
     variance: variance
+  };
+}
+
+/**
+ * Checks that this statement's opening balance matches the closing balance
+ * you last recorded (from the previous month's statement) -- catches a
+ * missing/skipped month, or the wrong account/period being imported.
+ *
+ * First-ever statement (no previous balance yet): pass `null` or
+ * `undefined` for previousClosingBalance -- this is treated as "nothing to
+ * compare against" and always passes. There's no special-casing needed on
+ * your end; you don't have to detect "is this the first month" yourself,
+ * just pass whatever you have (or don't have) on record.
+ *
+ * @param {Object} statement - the object returned by a parser's parse().
+ * @param {?number} previousClosingBalance - the closing balance you
+ *   recorded from the last statement you imported for this account, or
+ *   null/undefined if you don't have one yet (first import, or you simply
+ *   don't track this).
+ * @param {number} [tolerance=0.01]
+ * @return {{ok: boolean, reason: string, thisOpening: ?number,
+ *           previousClosing: ?number, gap: ?number}}
+ */
+function checkStatementContinuity(statement, previousClosingBalance, tolerance) {
+  const tol = (tolerance === undefined) ? 0.01 : tolerance;
+  const thisOpening = statement.openingBalance;
+
+  if (previousClosingBalance === null || previousClosingBalance === undefined) {
+    // Nothing on record to compare against -- either this is the very
+    // first statement for this account, or the caller isn't tracking
+    // continuity. Either way, there's nothing to flag.
+    return { ok: true, reason: '', thisOpening: thisOpening, previousClosing: null, gap: null };
+  }
+
+  if (thisOpening === null || thisOpening === undefined) {
+    // We have a previous balance to check against, but this statement's
+    // own opening balance couldn't be determined -- can't compare, but
+    // that's a parse problem (see statement.balanceCheck), not a
+    // continuity problem, so this still passes.
+    return { ok: true, reason: '', thisOpening: null, previousClosing: previousClosingBalance, gap: null };
+  }
+
+  const gap = Math.round((Number(thisOpening) - Number(previousClosingBalance)) * 100) / 100;
+  const ok = Math.abs(gap) <= tol;
+
+  return {
+    ok: ok,
+    reason: ok ? '' : ('This statement opens at ' + Number(thisOpening).toFixed(2) +
+      ' but the last recorded closing balance was ' + Number(previousClosingBalance).toFixed(2) +
+      ' (gap ' + gap.toFixed(2) + '). A month may be missing between them, or this is the ' +
+      'wrong account/period.'),
+    thisOpening: thisOpening,
+    previousClosing: previousClosingBalance,
+    gap: gap
   };
 }

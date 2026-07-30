@@ -102,7 +102,7 @@ when the output feeds into accounting records.
 | `src/ParserAnext.gs` | Parser for ANEXT Bank statements |
 | `src/ParserDbs.gs` | Parser for DBS Bank statements |
 | `src/ParserGeneric.gs` | Conservative fallback for statements that don't match either bank — extracts date/description/balance but flags every row for manual review rather than guessing |
-| `src/BalanceCheck.gs` | **Required** by all three parsers above — `validateStatementBalance()`, called automatically at the end of every `parse()` |
+| `src/BalanceCheck.gs` | **Required** by all three parsers above — `validateStatementBalance()` (called automatically at the end of every `parse()`) and `checkStatementContinuity()` (optional, month-over-month gap check — you call this one yourself) |
 | `src/Extract.gs` | Optional: PDF→text via Drive OCR + parser auto-detection. Only needed if you're extracting PDF text inside Apps Script; skip it if you already have your own text extraction |
 
 ## Usage
@@ -152,6 +152,58 @@ If you're in Apps Script and getting PDFs from Drive, `src/Extract.gs` has
 `extractPdfText(file)` (OCR-on-copy via the Drive API advanced service —
 enable it under **Services** in the Apps Script editor) and
 `pickParser(text)` to auto-select the right parser.
+
+## Checking continuity across months (optional)
+
+`statement.balanceCheck` only validates one statement against itself. It
+can't tell you whether *this* statement picks up where the *last* one left
+off — whether a month was skipped, or the wrong account/period got
+imported — because this library never sees more than one statement at a
+time and has no idea where (or whether) you're keeping a record of past
+balances.
+
+`checkStatementContinuity()` (in `BalanceCheck.gs`) fills that gap: you
+give it this statement plus whatever closing balance you last recorded
+yourself (from any storage you like — a spreadsheet cell, a database row,
+`PropertiesService`, a JSON file), and it tells you whether they line up.
+
+```javascript
+// You own remembering "last known balance" -- however you already
+// persist state. Example using Apps Script's PropertiesService:
+const props = PropertiesService.getScriptProperties();
+const key = 'lastClosingBalance_' + statement.bank + '_' + statement.accountNumber;
+const previousClosingBalance = props.getProperty(key); // null if never set
+
+const continuity = checkStatementContinuity(
+  statement,
+  previousClosingBalance === null ? null : Number(previousClosingBalance)
+);
+
+if (!continuity.ok) {
+  console.warn('Continuity check failed:', continuity.reason);
+  // e.g. a month is missing between imports -- don't import yet
+} else {
+  // Safe to import. Record this statement's closing balance for next time.
+  props.setProperty(key, String(statement.closingBalance));
+}
+```
+
+**First month / no previous balance yet:** pass `null` (or `undefined`) as
+`previousClosingBalance` — this always passes (`ok: true`) rather than
+being treated as a gap. You don't need to detect "is this the first
+import" yourself; just pass whatever you have on record, including
+nothing.
+
+```javascript
+// statement = { openingBalance, ... }
+// return = {
+//   ok: boolean,
+//   reason: string,               // set only when ok is false
+//   thisOpening: number|null,      // this statement's own opening balance
+//   previousClosing: number|null,  // what you passed in (null if you passed null/undefined)
+//   gap: number|null               // thisOpening - previousClosing
+// }
+```
 
 ## Detecting your bank / statement format
 
