@@ -1,0 +1,7 @@
+{
+  "name": "business-bank-statement-parser",
+  "private": true,
+  "scripts": {
+    "test": "node tests/parser-anext.test.js"
+  }
+}

@@ -188,6 +188,18 @@ if (!continuity.ok) {
 }
 ```
 
+For imports, use the fail-closed gate immediately before writing any rows:
+
+```javascript
+assertStatementReadyForImport(statement, previousClosingBalance);
+// Only write the month's rows after this returns successfully.
+```
+
+For ANEXT's current statement format the gate also checks the parsed debit,
+credit, and interest totals against the statement summary. A missing page-first
+row or a mis-associated amount therefore stops the import even when the PDF
+text extraction looked superficially successful.
+
 **First month / no previous balance yet:** pass `null` (or `undefined`) as
 `previousClosingBalance` — this always passes (`ok: true`) rather than
 being treated as a gap. You don't need to detect "is this the first

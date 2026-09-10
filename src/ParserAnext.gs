@@ -86,7 +86,8 @@ const ParserAnext = {
       statementPeriod: period,
       openingBalance: openingBalance,
       closingBalance: closingBalance,
-      transactions: res.transactions
+      transactions: res.transactions,
+      statementTotals: res.statementTotals || null
     };
     // Tally check (see BalanceCheck.gs): does opening + sum(transactions)
     // equal closing, and does each row's own printed balance agree with the
@@ -113,10 +114,17 @@ const ParserAnext = {
     const dateHead = new RegExp('^(' + this._DATE + ')\\s+(.*)$');
 
     let openingBalance = null, closingBalance = null;
+    const statementTotals = { debit: null, credit: null, interest: null };
     const om = sgdText.match(/Opening Balance\s+([\d,]+\.\d{2})/i);
     if (om) openingBalance = this._toNumber(om[1]);
     const cm = sgdText.match(/Closing Balance\s+([\d,]+\.\d{2})/i);
     if (cm) closingBalance = this._toNumber(cm[1]);
+    const dm = sgdText.match(/Total Debit\s+([\d,]+\.\d{2})/i);
+    if (dm) statementTotals.debit = this._toNumber(dm[1]);
+    const crm = sgdText.match(/Total Credit\s+([\d,]+\.\d{2})/i);
+    if (crm) statementTotals.credit = this._toNumber(crm[1]);
+    const im = sgdText.match(/of which Interest Earned\s+([\d,]+\.\d{2})/i);
+    if (im) statementTotals.interest = this._toNumber(im[1]);
 
     const drop = [
       /^Account Summary/i, /Opening Balance/i, /Closing Balance/i,
@@ -176,16 +184,12 @@ const ParserAnext = {
       };
     });
 
-    // Reconstruct a running balance (for dedup) from the summary opening.
-    if (openingBalance !== null) {
-      let run = openingBalance;
-      out.forEach(function (t) {
-        run = Math.round((run + (t.incoming || 0) - (t.outgoing || 0)) * 100) / 100;
-        t.balance = run;
-      });
-    }
-
-    return { openingBalance: openingBalance, closingBalance: closingBalance, transactions: out };
+    return {
+      openingBalance: openingBalance,
+      closingBalance: closingBalance,
+      statementTotals: statementTotals,
+      transactions: out
+    };
   },
 
   // -----------------------------------------------------------------------

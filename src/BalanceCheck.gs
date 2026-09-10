@@ -35,7 +35,9 @@
  *           calculatedClosing: ?number, variance: ?number}}
  */
 function validateStatementBalance(statement, tolerance) {
-  const tol = (tolerance === undefined) ? 0.01 : tolerance;
+  // Currency values are expected to agree to the cent. A half-cent threshold
+  // avoids allowing a full one-cent variance through the control.
+  const tol = (tolerance === undefined) ? 0.005 : tolerance;
   const txns = statement.transactions || [];
   if (statement.openingBalance === null || statement.openingBalance === undefined ||
       statement.closingBalance === null || statement.closingBalance === undefined) {
@@ -48,27 +50,66 @@ function validateStatementBalance(statement, tolerance) {
     };
   }
 
+  if (!txns.length) {
+    return {
+      passed: false,
+      reason: 'No transactions were parsed.',
+      expectedClosing: statement.closingBalance,
+      calculatedClosing: statement.openingBalance,
+      variance: null
+    };
+  }
+
   let running = statement.openingBalance;
   let breakRow = null;
+  let warningRow = null;
+  let totalDebit = 0;
+  let totalCredit = 0;
+  let totalInterest = 0;
   txns.forEach(function (t, i) {
-    const net = (t.incoming || 0) - (t.outgoing || 0);
-    running += net;
+    const incoming = Number(t.incoming || 0);
+    const outgoing = Number(t.outgoing || 0);
+    totalDebit += outgoing;
+    totalCredit += incoming;
+    if (/INTEREST\s+EARNED/i.test(String(t.description || ''))) totalInterest += incoming;
+    running = Math.round((running + incoming - outgoing) * 100) / 100;
+    if (warningRow === null && t.parseWarning) warningRow = i + 1;
     if (t.balance !== null && t.balance !== undefined) {
       if (breakRow === null && Math.abs(t.balance - running) > tol) breakRow = i + 1;
-      running = t.balance; // re-anchor to the statement's own running balance
     }
   });
 
   const calculatedClosing = Math.round(running * 100) / 100;
   const variance = Math.round((calculatedClosing - statement.closingBalance) * 100) / 100;
-  const passed = (breakRow === null) && Math.abs(variance) < tol;
+  const totals = statement.statementTotals;
+  let totalsReason = '';
+  if (totals) {
+    if (totals.debit === null || totals.credit === null || totals.interest === null) {
+      totalsReason = 'Could not determine all statement summary totals.';
+    } else if (Math.abs(totalDebit - totals.debit) >= tol) {
+      totalsReason = 'Parsed debit total does not match statement Total Debit.';
+    } else if (Math.abs(totalCredit - totals.credit) >= tol) {
+      totalsReason = 'Parsed credit total does not match statement Total Credit.';
+    } else if (Math.abs(totalInterest - totals.interest) >= tol) {
+      totalsReason = 'Parsed interest total does not match statement Interest Earned.';
+    }
+  }
+  const reason = warningRow !== null ? ('Parse warning at transaction ' + warningRow) :
+    (breakRow !== null ? ('Running balance breaks at transaction ' + breakRow) :
+    (totalsReason || (Math.abs(variance) >= tol ? 'Calculated closing balance does not match statement closing balance.' : '')));
+  const passed = reason === '';
 
   return {
     passed: passed,
-    reason: breakRow !== null ? ('Running balance breaks at transaction ' + breakRow) : '',
+    reason: reason,
     expectedClosing: statement.closingBalance,
     calculatedClosing: calculatedClosing,
-    variance: variance
+    variance: variance,
+    parsedTotals: {
+      debit: Math.round(totalDebit * 100) / 100,
+      credit: Math.round(totalCredit * 100) / 100,
+      interest: Math.round(totalInterest * 100) / 100
+    }
   };
 }
 
@@ -93,7 +134,7 @@ function validateStatementBalance(statement, tolerance) {
  *           previousClosing: ?number, gap: ?number}}
  */
 function checkStatementContinuity(statement, previousClosingBalance, tolerance) {
-  const tol = (tolerance === undefined) ? 0.01 : tolerance;
+  const tol = (tolerance === undefined) ? 0.005 : tolerance;
   const thisOpening = statement.openingBalance;
 
   if (previousClosingBalance === null || previousClosingBalance === undefined) {
@@ -104,11 +145,13 @@ function checkStatementContinuity(statement, previousClosingBalance, tolerance) 
   }
 
   if (thisOpening === null || thisOpening === undefined) {
-    // We have a previous balance to check against, but this statement's
-    // own opening balance couldn't be determined -- can't compare, but
-    // that's a parse problem (see statement.balanceCheck), not a
-    // continuity problem, so this still passes.
-    return { ok: true, reason: '', thisOpening: null, previousClosing: previousClosingBalance, gap: null };
+    return {
+      ok: false,
+      reason: 'Cannot verify continuity because this statement opening balance is missing.',
+      thisOpening: null,
+      previousClosing: previousClosingBalance,
+      gap: null
+    };
   }
 
   const gap = Math.round((Number(thisOpening) - Number(previousClosingBalance)) * 100) / 100;
@@ -124,4 +167,16 @@ function checkStatementContinuity(statement, previousClosingBalance, tolerance) 
     previousClosing: previousClosingBalance,
     gap: gap
   };
+}
+
+/**
+ * Fail-closed import gate. Call this immediately before writing rows.
+ * @throws {Error} when the statement or month-to-month continuity fails.
+ */
+function assertStatementReadyForImport(statement, previousClosingBalance, tolerance) {
+  const balance = statement.balanceCheck || validateStatementBalance(statement, tolerance);
+  if (!balance.passed) throw new Error('Statement validation failed: ' + balance.reason);
+  const continuity = checkStatementContinuity(statement, previousClosingBalance, tolerance);
+  if (!continuity.ok) throw new Error('Statement continuity failed: ' + continuity.reason);
+  return { balanceCheck: balance, continuityCheck: continuity };
 }
