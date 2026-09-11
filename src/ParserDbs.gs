@@ -157,7 +157,7 @@ const ParserDbs = {
 
     let openingBalance = null;
     const balances = [];   // running balance after each txn, in order
-    const entries = [];    // { date, descTokens: [] }, in order
+    const entries = [];    // { date, descTokens: [], printedAmount }, in order
 
     lines.forEach(function (line) {
       if (/Balance Brought Forward/i.test(line)) {
@@ -173,7 +173,11 @@ const ParserDbs = {
         const amts = (two[3].match(/[\d,]+\.\d{2}/g) || []);
         const balance = amts.length ? self._toNumber(amts[amts.length - 1]) : null;
         const desc = two[3].replace(/[\d,]+\.\d{2}/g, ' ').replace(/\s+/g, ' ').trim();
-        entries.push({ date: self._parseDate(two[1]), descTokens: [desc] });
+        entries.push({
+          date: self._parseDate(two[1]),
+          descTokens: [desc],
+          printedAmount: amts.length > 1 ? self._toNumber(amts[amts.length - 2]) : null
+        });
         if (balance !== null) balances.push(balance);
         return;
       }
@@ -187,8 +191,13 @@ const ParserDbs = {
         }
         // Detail line: date + text + trailing amount (amount ignored; the
         // running balance drives amount/direction).
+        const printed = rest.match(/([\d,]+\.\d{2})\s*$/);
         const desc = rest.replace(/[\d,]+\.\d{2}\s*$/, '').replace(/\s+/g, ' ').trim();
-        entries.push({ date: self._parseDate(one[1]), descTokens: [desc] });
+        entries.push({
+          date: self._parseDate(one[1]),
+          descTokens: [desc],
+          printedAmount: printed ? self._toNumber(printed[1]) : null
+        });
         return;
       }
 
@@ -205,14 +214,23 @@ const ParserDbs = {
       const incoming = delta > 0;
       const amount = Math.abs(delta);
       const description = entries[i].descTokens.join(' ').replace(/\s+/g, ' ').trim();
-      transactions.push({
+      const transaction = {
         date: entries[i].date,
         description: description,
         outgoing: incoming ? null : amount,
         incoming: incoming ? amount : null,
         balance: balance,
-        payerPayee: this._extractCounterparty(description)
-      });
+        payerPayee: this._extractCounterparty(description),
+        printedAmount: entries[i].printedAmount
+      };
+      if (amount === 0) {
+        transaction.parseWarning = 'Zero-value financial transaction';
+      } else if (entries[i].printedAmount !== null &&
+                 Math.abs(entries[i].printedAmount - amount) >= 0.005) {
+        transaction.parseWarning = 'Printed amount ' + entries[i].printedAmount.toFixed(2) +
+          ' does not match running-balance movement ' + amount.toFixed(2);
+      }
+      transactions.push(transaction);
       prev = balance;
     }
 

@@ -63,12 +63,14 @@ function validateStatementBalance(statement, tolerance) {
   let running = statement.openingBalance;
   let breakRow = null;
   let warningRow = null;
+  let zeroAmountRow = null;
   let totalDebit = 0;
   let totalCredit = 0;
   let totalInterest = 0;
   txns.forEach(function (t, i) {
     const incoming = Number(t.incoming || 0);
     const outgoing = Number(t.outgoing || 0);
+    if (zeroAmountRow === null && incoming === 0 && outgoing === 0) zeroAmountRow = i + 1;
     totalDebit += outgoing;
     totalCredit += incoming;
     if (/INTEREST\s+EARNED/i.test(String(t.description || ''))) totalInterest += incoming;
@@ -94,9 +96,10 @@ function validateStatementBalance(statement, tolerance) {
       totalsReason = 'Parsed interest total does not match statement Interest Earned.';
     }
   }
-  const reason = warningRow !== null ? ('Parse warning at transaction ' + warningRow) :
+  const reason = zeroAmountRow !== null ? ('Zero-value transaction at transaction ' + zeroAmountRow) :
+    (warningRow !== null ? ('Parse warning at transaction ' + warningRow) :
     (breakRow !== null ? ('Running balance breaks at transaction ' + breakRow) :
-    (totalsReason || (Math.abs(variance) >= tol ? 'Calculated closing balance does not match statement closing balance.' : '')));
+    (totalsReason || (Math.abs(variance) >= tol ? 'Calculated closing balance does not match statement closing balance.' : ''))));
   const passed = reason === '';
 
   return {
