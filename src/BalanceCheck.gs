@@ -86,13 +86,18 @@ function validateStatementBalance(statement, tolerance) {
   const totals = statement.statementTotals;
   let totalsReason = '';
   if (totals) {
-    if (totals.debit === null || totals.credit === null || totals.interest === null) {
+    // ANEXT prints a separate interest subtotal; DBS prints gross debit and
+    // credit only. Do not invent an interest total for a bank that omits it.
+    const hasInterest = Object.prototype.hasOwnProperty.call(totals, 'interest');
+    const validTotal = value => typeof value === 'number' && Number.isFinite(value) && value >= 0;
+    if (!validTotal(totals.debit) || !validTotal(totals.credit) ||
+        (hasInterest && !validTotal(totals.interest))) {
       totalsReason = 'Could not determine all statement summary totals.';
     } else if (Math.abs(totalDebit - totals.debit) >= tol) {
       totalsReason = 'Parsed debit total does not match statement Total Debit.';
     } else if (Math.abs(totalCredit - totals.credit) >= tol) {
       totalsReason = 'Parsed credit total does not match statement Total Credit.';
-    } else if (Math.abs(totalInterest - totals.interest) >= tol) {
+    } else if (hasInterest && Math.abs(totalInterest - totals.interest) >= tol) {
       totalsReason = 'Parsed interest total does not match statement Interest Earned.';
     }
   }

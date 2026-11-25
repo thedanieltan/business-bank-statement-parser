@@ -9,13 +9,13 @@
  * jumbled block, e.g.:
  *
  *   Balance Brought Forward 0.00
- *   04-May-26 1,632.00                         <- value date + BALANCE
- *   04-May-26 FAST PAYMENT 2660DBS 1,632.00    <- txn date + details + amount
- *   20260504ANTPSGSGBRT0064491 OTHER           <- continuation
- *   SOME COMPANY PTE. LTD.                      <- counterparty (continuation)
- *   20260504ANTPSGSGBRT0064491 SGD 1632        <- continuation
+ *   04-May-30 125.00                         <- value date + BALANCE
+ *   04-May-30 FAST PAYMENT DEMO-01 125.00     <- txn date + details + amount
+ *   DEMO-TRANSFER-01 OTHER                   <- continuation
+ *   SAMPLE CUSTOMER PTE. LTD.                <- counterparty (continuation)
+ *   DEMO-TRANSFER-01 SGD 125                  <- continuation
  *   ...
- *   30-May-26 30-May-26 ADVICE ADV MONTHLY ACCOUNT FEE 10.00 1,832.00  <- combined
+ *   30-May-30 30-May-30 ADVICE ADV MONTHLY ACCOUNT FEE 5.00 120.00  <- combined
  *   Total ... Balance Carried Forward
  *
  * Rather than trust the jumbled Withdrawal/Deposit columns, DIRECTION and
@@ -29,11 +29,10 @@
  * used FOR (loan repayments, operating expenses, intra-company transfers...)
  * is specific to each business, not to DBS's statement format.
  *
- * NOTE ON PAGE-HEADER NOISE: like most bank statements, DBS repeats the
- * account holder's own registered address as running header/footer text.
- * That text is account-holder-specific, so it isn't hardcoded here -- if you
- * see your own company's address leaking into transaction descriptions, add
- * it to the _NOISE list below (see the comment there).
+ * Repeated page headers are excluded by their bank/table boundaries rather
+ * than by hardcoding account-holder names. Transaction continuations within
+ * the table are retained. Unrecognized extraction layouts may still need
+ * caller-supplied noise rules and should always be validated before import.
  * -----------------------------------------------------------------------
  */
 
@@ -51,7 +50,8 @@ const ParserDbs = {
   parse: function (text) {
     const accountNumber = this._extractAccountNumber(text);
     const period = this._extractStatementPeriod(text);
-    const res = this._extractTransactions(this._isolateSGD(text));
+    const sgd = this._isolateSGD(text);
+    const res = this._extractTransactions(sgd);
 
     let closingBalance = null;
     for (let i = res.transactions.length - 1; i >= 0; i--) {
@@ -76,6 +76,10 @@ const ParserDbs = {
       closingBalance: closingBalance,
       transactions: res.transactions
     };
+    // Add only independently printed totals, never totals synthesized from
+    // parsed transactions. Older extracts without this summary stay supported.
+    const totals = this._extractStatementTotals(sgd, text);
+    if (totals !== null) statement.statementTotals = totals;
     // Tally check (see BalanceCheck.gs): does opening + sum(transactions)
     // equal closing, and does each row's own printed balance agree with the
     // running total? A false result almost always means a row was
@@ -143,7 +147,55 @@ const ParserDbs = {
             .replace(/\s*GST\s*Reg\s*No.*$/i, '');
   },
 
+  /** Keep the transaction table; do not treat page furniture as a payee. */
+  _cleanTransactionSection: function (text) {
+    let header = true, finished = false;
+    const date = new RegExp('^' + this._DATE + '\\s+');
+    return String(text).split('\n').filter(function (raw) {
+      const line = raw.trim();
+      if (finished) return false;
+      if (/^Total(?:\s+[\d,]+\.\d{2}(?:\s|$)|\s*$)/i.test(line) || /\bBalance Carried Forward\b/i.test(line)) {
+        finished = true;
+        return false;
+      }
+      if (/^Continue on the next page|^DBS\s*Bank\b|^Account Statement\b|^Page\s*\d|^Details Of Your DBS\b|^Account\s*No\b|^Currency\s*:/i.test(line)) {
+        header = true;
+        return false;
+      }
+      if (/Balance Brought Forward/i.test(line) || date.test(line)) {
+        header = false;
+        return true;
+      }
+      // A complete repeated column heading also resumes a description that
+      // wraps onto the next page before its next dated transaction.
+      if (/Withdrawal\s+Deposit\s+Balance\s*$/i.test(line)) {
+        header = false;
+        return false;
+      }
+      return !header;
+    }).join('\n');
+  },
+
+  /** Optional DBS gross withdrawal/deposit summary, in printed column order. */
+  _extractStatementTotals: function (text, columnContext) {
+    // Without the column heading the order cannot be proven. Keep supporting
+    // older text-only extracts rather than guessing which total is the debit.
+    // DBS may print the common table heading before "Currency: SGD".
+    // Read column order from the original text, but amounts only from SGD.
+    if (!/\bWithdrawal\s+Deposit\b/i.test((columnContext || text).replace(/\s+/g, ' '))) return null;
+    const rows = text.split('\n').map(function (line) { return line.trim(); })
+      .filter(function (line) { return /^Total(?:\s+\d|\s*$)/i.test(line); });
+    if (!rows.length) return null;
+    const amount = '((?:\\d{1,3}(?:,\\d{3})+|\\d+)\\.\\d{2})';
+    const pattern = new RegExp('^Total\\s+' + amount + '\\s+' + amount + '(?:\\s+No:)?$', 'i');
+    const match = rows.length === 1 ? rows[0].match(pattern) : null;
+    // A present but malformed/duplicated summary must fail validation.
+    return match ? { debit: this._toNumber(match[1]), credit: this._toNumber(match[2]) }
+      : { debit: null, credit: null };
+  },
+
   _extractTransactions: function (sgdText) {
+    sgdText = this._cleanTransactionSection(sgdText);
     const self = this;
     const dateRe = new RegExp('^(' + this._DATE + ')\\s+(.*)$');
     const twoDateRe = new RegExp('^(' + this._DATE + ')\\s+(' + this._DATE + ')\\s+(.*)$');
@@ -165,8 +217,6 @@ const ParserDbs = {
         if (m) openingBalance = self._toNumber(m[1]);
         return;
       }
-      if (/Balance Carried Forward/i.test(line) || /^Total\b/i.test(line)) return;
-
       const two = line.match(twoDateRe);
       if (two) {
         // Combined line: txnDate valueDate details <amount> <balance>
@@ -210,7 +260,7 @@ const ParserDbs = {
     let prev = (openingBalance !== null) ? openingBalance : 0;
     for (let i = 0; i < n; i++) {
       const balance = balances[i];
-      const delta = balance - prev;
+      const delta = Math.round((balance - prev) * 100) / 100;
       const incoming = delta > 0;
       const amount = Math.abs(delta);
       const description = entries[i].descTokens.join(' ').replace(/\s+/g, ' ').trim();
