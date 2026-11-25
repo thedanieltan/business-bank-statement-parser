@@ -117,6 +117,10 @@ const statement = parser.parse(statementText);
 //   statementPeriod: { start: Date|null, end: Date|null },
 //   openingBalance: number|null,
 //   closingBalance: number|null,
+//   statementTotals: {         // optional DBS gross summary; ANEXT may also include interest
+//     debit: number|null,
+//     credit: number|null
+//   },
 //   transactions: [
 //     {
 //       date: Date,
@@ -200,6 +204,14 @@ credit, and interest totals against the statement summary. A missing page-first
 row or a mis-associated amount therefore stops the import even when the PDF
 text extraction looked superficially successful.
 
+For DBS, when the text contains a printed `Withdrawal Deposit` column
+heading and the SGD section has a `Total` row, the parser also checks the independently printed
+gross debit and credit totals. These appear as the optional `statementTotals`
+field, without an invented interest subtotal. Malformed or duplicated numeric
+summary rows fail validation. Older extracts without a recognizable summary
+remain supported and use the existing running-balance checks. DBS movement
+amounts derived from balance differences are rounded to two decimal places.
+
 **First month / no previous balance yet:** pass `null` (or `undefined`) as
 `previousClosingBalance` — this always passes (`ok: true`) rather than
 being treated as a gap. You don't need to detect "is this the first
@@ -215,6 +227,26 @@ nothing.
 //   previousClosing: number|null,  // what you passed in (null if you passed null/undefined)
 //   gap: number|null               // thisOpening - previousClosing
 // }
+```
+
+## Categorization belongs to your application
+
+`parse(text)` extracts statement data; it does not assign transaction categories,
+settle invoices, select ledger accounts, determine cash ownership or assume that
+an incoming payment is an internal transfer. The optional `guessType()` helper
+keeps its existing bank-interest/bank-charge hints. Referral receipts, loan
+payments, own-account transfers and supplier payments remain uncategorized so
+you can apply your own records and accounting rules. Original transaction
+wording and best-effort counterparty details remain available for that purpose.
+
+```javascript
+const statement = ParserDbs.parse(statementText);
+// Apply your own categories only after validating the statement.
+assertStatementReadyForImport(statement, previousClosingBalance);
+const categorized = statement.transactions.map(transaction => ({
+  ...transaction,
+  category: yourCategorizer(transaction)
+}));
 ```
 
 ## Detecting your bank / statement format
@@ -242,12 +274,13 @@ else { ParserGeneric.parse(text); } // flagged for manual review
   wording the bank itself prints (interest earned, account fees). Anything
   else comes back as `''` — what a transaction is *for* is specific to your
   own business/bookkeeping, which this parser has no way to know.
-- **Page-header noise.** Multi-page statements often repeat the account
-  holder's own name/address as running header text on every page. Since
-  that text is specific to whoever the statement belongs to (not to the
-  bank's format), it isn't hardcoded into the `_NOISE` list — if you notice
-  your own company name/address leaking into transaction descriptions, add
-  it to the `_NOISE` array in the relevant parser file.
+- **Page-header noise.** DBS uses recognizable page and table boundaries to
+  exclude repeated account-holder/address headers and post-summary messages,
+  while retaining transaction continuations. Descriptions can also resume
+  after a complete repeated `Withdrawal Deposit Balance` heading. Unrecognized
+  layouts or text extraction orders may still need caller-supplied `_NOISE`
+  rules. Keep those local; do not contribute real names, addresses, statements
+  or transaction references. ANEXT retains its separate layout handling.
 - **Layout changes will break this.** Both parsers are written against a
   specific, real statement layout as of 2026. If your bank changes their
   statement format, `detect()` may still match but `parse()` could return
